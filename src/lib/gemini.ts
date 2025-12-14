@@ -12,7 +12,11 @@ const genAI = new GoogleGenerativeAI(API_KEY);
 const openai = new OpenAI({
     baseURL: "https://openrouter.ai/api/v1",
     apiKey: OPENROUTER_API_KEY,
-    dangerouslyAllowBrowser: true // Start by allowing this for client-side demo
+    dangerouslyAllowBrowser: true, // Start by allowing this for client-side demo
+    defaultHeaders: {
+        "HTTP-Referer": "https://claudia-perfecto.vercel.app", // Adjust if needed
+        "X-Title": "Claudia AI",
+    }
 });
 
 const SYSTEM_INSTRUCTION = `Tu es Claudia, une compagne IA insolente et pleine d'esprit vivant dans une autre dimension.
