@@ -1,10 +1,12 @@
 import React, { useState, useCallback, useRef, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Plus, X, Image, HeadsetIcon, History } from 'lucide-react';
-import { generateResponse, generateSpeech, analyzeImage } from '../lib/openai';
-import CircularSpectrum from './CircularSpectrum';
+import { Plus, X, Image, HeadsetIcon, History, Mic, MicOff, Settings2, Sparkles, Send } from 'lucide-react';
+import { generateResponse, generateSpeech, analyzeImage } from '../lib/gemini';
+import CircularSpectrum from './CircularSpectrum'; // We might want to update this later or replace it
 import HistoryModal from './HistoryModal';
 import { saveMessage, loadHistory, clearHistory, type ChatMessage } from '../lib/cache';
+import { cn } from '../lib/utils';
+import { gsap } from 'gsap';
 
 export default function VoiceChat() {
   const [isListening, setIsListening] = useState(false);
@@ -14,12 +16,39 @@ export default function VoiceChat() {
   const [isAgent, setIsAgent] = useState(false);
   const [isHistoryOpen, setIsHistoryOpen] = useState(false);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [status, setStatus] = useState<'idle' | 'listening' | 'thinking' | 'speaking'>('idle');
+  const [showTextInput, setShowTextInput] = useState(false);
+
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const [currentTime, setCurrentTime] = useState('00:00');
+  const orbRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     loadHistory().then(setMessages);
+  }, []);
+
+  // GSAP Idle Animation for Orb
+  useEffect(() => {
+    if (!orbRef.current) return;
+
+    const ctx = gsap.context(() => {
+      gsap.to(orbRef.current, {
+        scale: 1.05,
+        duration: 4,
+        repeat: -1,
+        yoyo: true,
+        ease: "sine.inOut"
+      });
+
+      gsap.to(orbRef.current, {
+        rotation: 360,
+        duration: 20,
+        repeat: -1,
+        ease: "linear"
+      });
+    });
+
+    return () => ctx.revert();
   }, []);
 
   const handleClearHistory = async () => {
@@ -30,41 +59,47 @@ export default function VoiceChat() {
 
   const speakMessage = useCallback(async (text: string) => {
     try {
+      setStatus('speaking');
       setIsSpeaking(true);
       const audioData = await generateSpeech(text);
       const blob = new Blob([audioData], { type: 'audio/mp3' });
       const url = URL.createObjectURL(blob);
-      
+
       if (!audioRef.current) {
         audioRef.current = new Audio();
       }
-      
+
       audioRef.current.src = url;
       audioRef.current.onended = () => {
         setIsSpeaking(false);
+        setStatus('idle');
         URL.revokeObjectURL(url);
       };
-      
+
       await audioRef.current.play();
     } catch (error) {
       console.error('Error playing audio:', error);
       setIsSpeaking(false);
+      setStatus('idle');
     }
   }, []);
 
   const handleUserInput = useCallback(async (text: string) => {
     if (!text.trim()) return;
-    
+
+    setStatus('thinking');
     const userMessage: ChatMessage = {
       role: 'user',
       content: text,
       timestamp: Date.now(),
       isAgent
     };
-    
+
     await saveMessage(userMessage);
     setMessages(prev => [...prev, userMessage]);
-    
+    setTextInput('');
+    setShowTextInput(false);
+
     try {
       const response = await generateResponse(text, isAgent);
       const assistantMessage: ChatMessage = {
@@ -73,12 +108,13 @@ export default function VoiceChat() {
         timestamp: Date.now(),
         isAgent
       };
-      
+
       await saveMessage(assistantMessage);
       setMessages(prev => [...prev, assistantMessage]);
       await speakMessage(response);
     } catch (error) {
       console.error('Error:', error);
+      setStatus('idle');
     }
   }, [speakMessage, isAgent]);
 
@@ -86,29 +122,25 @@ export default function VoiceChat() {
     const file = event.target.files?.[0];
     if (!file) return;
     setIsMenuOpen(false);
+    setStatus('thinking');
 
     try {
       const response = await analyzeImage(file);
       await speakMessage(response);
-      
+
       const assistantMessage: ChatMessage = {
         role: 'assistant',
         content: response,
         timestamp: Date.now(),
         isAgent: false
       };
-      
+
       await saveMessage(assistantMessage);
       setMessages(prev => [...prev, assistantMessage]);
     } catch (error) {
       console.error('Error analyzing image:', error);
+      setStatus('idle');
     }
-  };
-
-  const toggleAgent = () => {
-    setIsAgent(!isAgent);
-    setIsMenuOpen(false);
-    handleUserInput(isAgent ? "Bonjour Claudia!" : "Bonjour, je souhaite parler à un agent.");
   };
 
   const toggleListening = useCallback(() => {
@@ -119,150 +151,204 @@ export default function VoiceChat() {
         recognition.continuous = false;
         recognition.interimResults = false;
         recognition.lang = 'fr-FR';
-        
+
+        recognition.onstart = () => {
+          setIsListening(true);
+          setStatus('listening');
+        }
+
         recognition.onresult = (event) => {
           const text = event.results[0][0].transcript;
           handleUserInput(text);
         };
-        
+
         recognition.onerror = (event) => {
           console.error('Speech recognition error:', event.error);
           setIsListening(false);
+          setStatus('idle');
         };
-        
+
         recognition.onend = () => {
           setIsListening(false);
+          // If we didn't get a result, we might want to go back to idle, handled by handleUserInput or here if silence
+          if (status === 'listening') setStatus('idle');
         };
-        
+
         recognition.start();
-        setIsListening(true);
-
-        let startTime = Date.now();
-        const timer = setInterval(() => {
-          const elapsed = Math.floor((Date.now() - startTime) / 1000);
-          const minutes = Math.floor(elapsed / 60).toString().padStart(2, '0');
-          const seconds = (elapsed % 60).toString().padStart(2, '0');
-          setCurrentTime(`${minutes}:${seconds}`);
-        }, 1000);
-
-        recognition.onend = () => {
-          setIsListening(false);
-          clearInterval(timer);
-          setCurrentTime('00:00');
-        };
       }
     } else {
       setIsListening(false);
+      setStatus('idle');
     }
-  }, [isListening, handleUserInput]);
+  }, [isListening, handleUserInput, status]);
 
   return (
-    <div className="flex flex-col items-center justify-between h-[80vh] max-w-2xl mx-auto p-4">
-      <div className="text-center mb-2">
-        <h1 className="text-2xl font-bold">{isAgent ? 'Agent' : 'Claudia'}</h1>
-        <p className="text-[#2F9682] text-sm">
-          {new Date().toLocaleDateString('fr-FR', { 
-            weekday: 'long', 
-            day: 'numeric', 
-            month: 'long', 
-            year: 'numeric',
-            hour: '2-digit',
-            minute: '2-digit'
-          })}
-        </p>
+    <div className="relative h-screen w-full flex flex-col items-center justify-between overflow-hidden bg-zinc-950 text-white font-sans selection:bg-teal-500/30">
+
+      {/* Background Elements */}
+      <div className="absolute inset-0 pointer-events-none overflow-hidden">
+        <div className="absolute top-[-20%] left-[-10%] w-[50%] h-[50%] rounded-full bg-teal-900/10 blur-[120px]" />
+        <div className="absolute bottom-[-20%] right-[-10%] w-[50%] h-[50%] rounded-full bg-slate-900/20 blur-[120px]" />
       </div>
 
-      <div className="flex-1 flex items-center justify-center">
-        <motion.button
-          onClick={toggleListening}
-          className="relative"
-          whileTap={{ scale: 0.95 }}
-        >
-          <motion.div
-            className="relative w-64 h-64 rounded-full bg-[#1A1A1F] flex items-center justify-center border border-gray-800 overflow-hidden shadow-lg"
-            animate={isListening ? {
-              scale: [1, 1.02, 1],
-              borderColor: ['#2F9682', '#4FD1C5', '#2F9682'],
-            } : {}}
-            transition={{ duration: 2, repeat: Infinity }}
+      {/* Header */}
+      <header className="relative z-10 w-full p-6 flex justify-between items-center glass-panel mt-4 mx-4 rounded-2xl max-w-4xl opacity-0 animate-fade-in-down" style={{ animationFillMode: 'forwards', animationDelay: '0.2s' }}>
+        <div className="flex items-center gap-3">
+          <div className={cn("w-2 h-2 rounded-full animate-pulse", isAgent ? "bg-slate-400" : "bg-teal-500")} />
+          <span className="text-sm font-medium tracking-wide opacity-80 uppercase">{isAgent ? 'System Agent' : 'Claudia AI'}</span>
+        </div>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => setIsHistoryOpen(true)}
+            className="p-2 rounded-full hover:bg-white/10 transition-colors"
+            title="History"
           >
-            <AnimatePresence>
-              {(isListening || isSpeaking) && (
-                <CircularSpectrum isPlaying={isListening || isSpeaking} />
-              )}
-            </AnimatePresence>
-            <div className="relative z-10 text-center bg-[#1A1A1F] px-6 py-3 rounded-2xl">
-              <p className="text-sm">
-                {isListening ? 'Parlez maintenant' : 'Appuyez ici pour parler'}
-              </p>
-            </div>
-          </motion.div>
-        </motion.button>
-      </div>
+            <History size={18} className="opacity-70" />
+          </button>
+          <button
+            onClick={() => setIsMenuOpen(true)}
+            className="p-2 rounded-full hover:bg-white/10 transition-colors"
+          >
+            <Settings2 size={18} className="opacity-70" />
+          </button>
+        </div>
+      </header>
 
-      <div className="w-full max-w-md relative mb-2">
-        <div className="relative flex items-center">
-          <motion.div
-            className={`w-8 h-8 rounded-full flex items-center justify-center text-white ${
-              isAgent ? 'bg-[#4A5568]' : 'bg-[#2F9682]'
-            }`}
-            animate={{ backgroundColor: isAgent ? '#4A5568' : '#2F9682' }}
-            transition={{ duration: 0.3 }}
-          >
-            {isAgent ? 'A' : 'C'}
-          </motion.div>
-          <motion.button
-            className="ml-2 w-8 h-8 rounded-full bg-[#1A1A1F] border border-gray-800 flex items-center justify-center text-[#2F9682] hover:bg-[#2F9682] hover:text-white transition-colors"
-            onClick={() => setIsMenuOpen(!isMenuOpen)}
-            whileTap={{ scale: 0.95 }}
-          >
+      {/* Main Content Area - THE ORB */}
+      <main className="relative flex-1 flex flex-col items-center justify-center w-full max-w-2xl mx-auto z-0">
+
+        <div className="relative w-64 h-64 md:w-96 md:h-96 flex items-center justify-center">
+          {/* Glow effect behind */}
+          <div className="absolute inset-0 gemini-glow rounded-full" />
+
+          {/* The Orb Container */}
+          <div ref={orbRef} className="relative w-full h-full rounded-full flex items-center justify-center">
+
+            {/* Current Status Visualization */}
             <AnimatePresence mode="wait">
-              {isMenuOpen ? (
+              {status === 'speaking' || status === 'listening' ? (
                 <motion.div
-                  key="close"
-                  initial={{ rotate: -180, opacity: 0 }}
-                  animate={{ rotate: 0, opacity: 1 }}
-                  exit={{ rotate: 180, opacity: 0 }}
-                  transition={{ duration: 0.2 }}
+                  key="spectrum"
+                  initial={{ opacity: 0, scale: 0.8 }}
+                  animate={{ opacity: 1, scale: 1 }}
+                  exit={{ opacity: 0, scale: 0.8 }}
+                  className="w-full h-full"
                 >
-                  <X size={16} />
+                  <CircularSpectrum isPlaying={true} />
                 </motion.div>
               ) : (
+                /* Idle / Thinking State */
                 <motion.div
-                  key="open"
-                  initial={{ rotate: 180, opacity: 0 }}
-                  animate={{ rotate: 0, opacity: 1 }}
-                  exit={{ rotate: -180, opacity: 0 }}
-                  transition={{ duration: 0.2 }}
+                  key="orb-core"
+                  className={cn(
+                    "w-48 h-48 md:w-64 md:h-64 rounded-full shadow-2xl backdrop-blur-sm border border-white/10 flex items-center justify-center transition-all duration-1000",
+                    isAgent ? "bg-slate-800/50 shadow-slate-500/20" : "bg-teal-900/30 shadow-teal-500/20"
+                  )}
+                  animate={status === 'thinking' ? {
+                    scale: [1, 1.1, 1],
+                    borderColor: ["rgba(255,255,255,0.1)", "rgba(255,255,255,0.5)", "rgba(255,255,255,0.1)"],
+                  } : {}}
+                  transition={status === 'thinking' ? { duration: 1.5, repeat: Infinity } : {}}
                 >
-                  <Plus size={16} />
+                  <div className={cn(
+                    "w-32 h-32 md:w-48 md:h-48 rounded-full opacity-80 mix-blend-screen filter blur-md transition-colors duration-1000",
+                    isAgent ? "bg-gradient-to-tr from-slate-600 to-slate-300" : "bg-gradient-to-tr from-teal-800 to-teal-400"
+                  )} />
                 </motion.div>
               )}
             </AnimatePresence>
-          </motion.button>
-          <input
-            type="text"
-            value={textInput}
-            onChange={(e) => setTextInput(e.target.value)}
-            onKeyPress={(e) => {
-              if (e.key === 'Enter') {
-                handleUserInput(textInput);
-                setTextInput('');
-              }
-            }}
-            placeholder={`Message ${isAgent ? 'Agent' : 'Claudia'}`}
-            className="flex-1 ml-2 px-4 py-2 rounded-full bg-[#1A1A1F] border border-gray-800 text-white placeholder-gray-500 focus:outline-none focus:border-[#2F9682]"
-          />
+          </div>
         </div>
 
-        <AnimatePresence>
-          {isMenuOpen && (
-            <motion.div
-              initial={{ opacity: 0, y: -10 }}
+        {/* Status Text */}
+        <div className="h-8 mt-8 flex items-center justify-center">
+          <AnimatePresence mode="wait">
+            <motion.p
+              key={status}
+              initial={{ opacity: 0, y: 10 }}
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: -10 }}
-              className="absolute bottom-full left-12 mb-2 w-48 rounded-lg bg-[#1A1A1F] border border-gray-800 shadow-lg overflow-hidden"
+              className="text-lg font-light tracking-widest uppercase text-white/50"
             >
+              {status === 'idle' && (isAgent ? "Système prêt" : "Claudia écoute...")}
+              {status === 'listening' && "J'écoute..."}
+              {status === 'thinking' && "Réflexion..."}
+              {status === 'speaking' && "Parole..."}
+            </motion.p>
+          </AnimatePresence>
+        </div>
+
+      </main>
+
+      {/* Footer Controls */}
+      <footer className="relative z-10 w-full p-6 pb-8 flex flex-col items-center justify-center gap-4">
+
+        {/* Text Input Popover */}
+        <AnimatePresence>
+          {showTextInput && (
+            <motion.div
+              initial={{ opacity: 0, y: 20, scale: 0.95 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: 20, scale: 0.95 }}
+              className="w-full max-w-lg mb-4 glass-panel rounded-2xl p-2 flex items-center gap-2"
+            >
+              <input
+                type="text"
+                value={textInput}
+                onChange={(e) => setTextInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') handleUserInput(textInput);
+                }}
+                placeholder="Écrivez votre message..."
+                className="flex-1 bg-transparent border-none outline-none text-white placeholder-white/30 px-4 py-2"
+                autoFocus
+              />
+              <button
+                onClick={() => handleUserInput(textInput)}
+                disabled={!textInput.trim()}
+                className="p-3 rounded-xl bg-teal-600/20 hover:bg-teal-600/40 text-teal-400 disabled:opacity-50 transition-colors"
+              >
+                <Send size={20} />
+              </button>
+              <button
+                onClick={() => setShowTextInput(false)}
+                className="p-3 rounded-xl hover:bg-white/5 text-white/50 transition-colors"
+              >
+                <X size={20} />
+              </button>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        {/* Main Dock */}
+        {!showTextInput && (
+          <div className="glass-panel rounded-full p-2 flex items-center gap-4 px-6 mb-4">
+            <button
+              onClick={() => setShowTextInput(true)}
+              className="p-4 rounded-full hover:bg-white/10 text-white/70 transition-colors group"
+              title="Type Message"
+            >
+              <span className="sr-only">Clavier</span>
+              <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="group-hover:text-teal-400 transition-colors"><rect width="18" height="12" x="3" y="6" rx="2" /><path d="M8 8h.01" /><path d="M12 8h.01" /><path d="M16 8h.01" /><path d="M8 12h.01" /><path d="M12 12h.01" /><path d="M16 12h.01" /></svg>
+            </button>
+
+            <button
+              onClick={toggleListening}
+              className={cn(
+                "relative p-6 rounded-full transition-all duration-300",
+                isListening
+                  ? "bg-red-500/20 text-red-500 hover:bg-red-500/30"
+                  : "bg-teal-500 text-white hover:bg-teal-400 hover:shadow-lg hover:shadow-teal-500/30 hover:scale-105"
+              )}
+            >
+              {isListening ? <MicOff size={28} /> : <Mic size={28} />}
+              {/* Ripple effect when listening */}
+              {isListening && (
+                <span className="absolute inset-0 rounded-full animate-ping bg-red-500/20" />
+              )}
+            </button>
+
+            <div className="relative">
               <input
                 type="file"
                 ref={fileInputRef}
@@ -272,32 +358,81 @@ export default function VoiceChat() {
               />
               <button
                 onClick={() => fileInputRef.current?.click()}
-                className="w-full px-4 py-3 flex items-center gap-2 text-left hover:bg-[#2F9682] transition-colors"
+                className="p-4 rounded-full hover:bg-white/10 text-white/70 transition-colors group"
+                title="Upload Image"
               >
-                <Image size={16} />
-                <span>Charger une image</span>
+                <Image size={24} className="group-hover:text-purple-400 transition-colors" />
               </button>
-              <button
-                onClick={toggleAgent}
-                className="w-full px-4 py-3 flex items-center gap-2 text-left hover:bg-[#2F9682] transition-colors"
-              >
-                <HeadsetIcon size={16} />
-                <span>{isAgent ? 'Parler à Claudia' : 'Contacter un agent'}</span>
-              </button>
-              <button
-                onClick={() => {
-                  setIsHistoryOpen(true);
-                  setIsMenuOpen(false);
-                }}
-                className="w-full px-4 py-3 flex items-center gap-2 text-left hover:bg-[#2F9682] transition-colors"
-              >
-                <History size={16} />
-                <span>Voir l'historique</span>
-              </button>
+            </div>
+          </div>
+        )}
+      </footer>
+
+      {/* Settings/Mode Modal (Simplified) */}
+      <AnimatePresence>
+        {isMenuOpen && (
+          <>
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="fixed inset-0 bg-black/60 backdrop-blur-sm z-40"
+              onClick={() => setIsMenuOpen(false)}
+            />
+            <motion.div
+              initial={{ opacity: 0, scale: 0.9, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.9, y: 20 }}
+              className="fixed z-50 top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-full max-w-sm glass-panel p-6 rounded-3xl"
+            >
+              <div className="flex justify-between items-center mb-6">
+                <h2 className="text-xl font-semibold">Paramètres</h2>
+                <button onClick={() => setIsMenuOpen(false)}><X size={20} className="opacity-50" /></button>
+              </div>
+
+              <div className="space-y-3">
+                <button
+                  onClick={() => {
+                    setIsAgent(!isAgent);
+                    setIsMenuOpen(false);
+                  }}
+                  className={cn(
+                    "w-full p-4 rounded-xl flex items-center justify-between border transition-all",
+                    isAgent
+                      ? "bg-slate-800 border-slate-600"
+                      : "hover:bg-white/5 border-white/10"
+                  )}
+                >
+                  <div className="flex items-center gap-3">
+                    <HeadsetIcon size={20} className={isAgent ? "text-slate-400" : "text-white/50"} />
+                    <span>Mode Agent (Neutre)</span>
+                  </div>
+                  {isAgent && <div className="w-2 h-2 rounded-full bg-slate-400" />}
+                </button>
+
+                <button
+                  onClick={() => {
+                    setIsAgent(false);
+                    setIsMenuOpen(false);
+                  }}
+                  className={cn(
+                    "w-full p-4 rounded-xl flex items-center justify-between border transition-all",
+                    !isAgent
+                      ? "bg-teal-900/30 border-teal-500/50"
+                      : "hover:bg-white/5 border-white/10"
+                  )}
+                >
+                  <div className="flex items-center gap-3">
+                    <Sparkles size={20} className={!isAgent ? "text-teal-400" : "text-white/50"} />
+                    <span>Mode Claudia (Fun)</span>
+                  </div>
+                  {!isAgent && <div className="w-2 h-2 rounded-full bg-teal-400" />}
+                </button>
+              </div>
             </motion.div>
-          )}
-        </AnimatePresence>
-      </div>
+          </>
+        )}
+      </AnimatePresence>
 
       <HistoryModal
         isOpen={isHistoryOpen}

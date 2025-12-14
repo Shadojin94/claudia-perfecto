@@ -9,12 +9,12 @@ export default function CircularSpectrum({ isPlaying }: CircularSpectrumProps) {
   return (
     <div className="absolute inset-0 flex items-center justify-center">
       <motion.div
-        className="absolute w-64 h-64 rounded-full overflow-hidden"
+        className="absolute w-64 h-64 rounded-full overflow-hidden opacity-80"
         initial={{ opacity: 0 }}
         animate={{ opacity: isPlaying ? 1 : 0 }}
         transition={{ duration: 0.3 }}
         style={{
-          background: '#1A1A1F',
+          background: 'transparent',
         }}
       >
         <img
@@ -22,7 +22,7 @@ export default function CircularSpectrum({ isPlaying }: CircularSpectrumProps) {
           alt="Animation"
           className="absolute w-[150%] h-[150%] top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 object-cover"
           style={{
-            mixBlendMode: 'screen',
+            mixBlendMode: 'plus-lighter', // Better for dark mode
           }}
         />
       </motion.div>
