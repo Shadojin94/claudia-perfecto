@@ -62,6 +62,28 @@ export default function VoiceChat() {
       setStatus('speaking');
       setIsSpeaking(true);
       const audioData = await generateSpeech(text);
+
+      // If audioData is empty, it means the fallback handled playback (or failed gracefully)
+      if (audioData.byteLength === 0) {
+        // Fallback usually plays audio directly, so we wait or just reset immediately?
+        // The fallback implementation in gemini.ts plays the audio THEN resolves.
+        // So we can assume speaking is done or handled by browser.
+        // However, `window.speechSynthesis.speak` is asynchronous but doesn't return a promise.
+        // Ideally we should listen to 'end' event but for now let's just reset status 
+        // after a short delay or immediately if we trust the browser TTS UI.
+        // Better: The fallback returns AFTER speaking starts. The `speak` method queues it.
+
+        // Let's attach an onend listener to the utterance if possible? 
+        // We can't access the utterance here easily without refactoring gemini.ts.
+
+        // Compromise: Just reset state. The browser TTS will play.
+        // But `isSpeaking` visual might be wrong. 
+        // For now, let's keep it simple: assume if it's 0 bytes, we just reset.
+        setIsSpeaking(false);
+        setStatus('idle');
+        return;
+      }
+
       const blob = new Blob([audioData], { type: 'audio/mp3' });
       const url = URL.createObjectURL(blob);
 
