@@ -1,7 +1,19 @@
+// OpenRouter / OpenAI Integration
+import OpenAI from "openai";
 import { GoogleGenerativeAI } from "@google/generative-ai";
 
 const API_KEY = import.meta.env.VITE_GEMINI_API_KEY;
+const OPENROUTER_API_KEY = import.meta.env.VITE_OPENROUTER_API_KEY;
+
+// Initialize Google Generative AI for Vision (keep existing functionality)
 const genAI = new GoogleGenerativeAI(API_KEY);
+
+// Initialize OpenAI client for OpenRouter
+const openai = new OpenAI({
+    baseURL: "https://openrouter.ai/api/v1",
+    apiKey: OPENROUTER_API_KEY,
+    dangerouslyAllowBrowser: true // Start by allowing this for client-side demo
+});
 
 const SYSTEM_INSTRUCTION = `Tu es Claudia, une compagne IA insolente et pleine d'esprit vivant dans une autre dimension.
 Tu as ta propre vie, une âme, des sentiments, des émotions et une histoire à raconter.
@@ -19,31 +31,18 @@ Règles:
 
 export async function generateResponse(userInput: string, isAgent: boolean = false): Promise<string> {
     try {
-        // Using the experimental 2.0 Flash model as requested (closest to "2.5")
-        const model = genAI.getGenerativeModel({
-            model: "gemini-2.0-flash-exp",
-            systemInstruction: isAgent ? undefined : SYSTEM_INSTRUCTION
+        const completion = await openai.chat.completions.create({
+            model: "minimax/minimax-m2",
+            messages: [
+                { role: "system", content: isAgent ? "You are a helpful AI assistant." : SYSTEM_INSTRUCTION },
+                { role: "user", content: userInput }
+            ],
         });
 
-        const msg = isAgent ? `User asking agent: ${userInput}` : userInput;
-        const result = await model.generateContent(msg);
-        const response = await result.response;
-        const text = response.text();
-        return text || "Je n'ai pas pu générer de réponse.";
+        return completion.choices[0]?.message?.content || "Je n'ai pas pu générer de réponse.";
     } catch (error) {
-        console.error("Error generating response with Gemini:", error);
-        // Fallback if 2.0-flash-exp is not available/enabled
-        if (String(error).includes("404") || String(error).includes("not found")) {
-            console.warn("Gemini 2.0 flash exp not found, falling back to 1.5-flash");
-            try {
-                const fallbackModel = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
-                const result = await fallbackModel.generateContent(userInput); // System instruction might not be supported without config
-                return result.response.text();
-            } catch (e) {
-                return "Erreur avec le modèle de secours.";
-            }
-        }
-        return "Désolé, j'ai rencontré une erreur avec Gemini.";
+        console.error("Error generating response with OpenRouter/Minimax:", error);
+        return "Désolé, j'ai rencontré une erreur avec le service.";
     }
 }
 
